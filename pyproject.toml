@@ -1,0 +1,25 @@
+[project]
+name = "llmtopic"
+version = "0.0.1"
+authors = [
+  { name="Daniel Klitzke", email="daniel.klitzke@renumics.com"}
+]
+description = "A library for extracting topics from text documents using llms."
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  "llama-cpp-python>=0.2.39",
+  "guidance>=0.1.10"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/dani2112/llmtopic"
+"Bug Tracker" = "https://github.com/dani2112/llmtopic/issues"
+
+[tool.setuptools]
+packages = ["llmtopic"]
