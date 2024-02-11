@@ -14,7 +14,8 @@ classifiers = [
 ]
 dependencies = [
   "llama-cpp-python>=0.2.39",
-  "guidance>=0.1.10"
+  "guidance>=0.1.10",
+  "tqdm",
 ]
 
 [project.urls]
