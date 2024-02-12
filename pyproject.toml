@@ -1,6 +1,6 @@
 [project]
 name = "llmtopic"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
   { name="Daniel Klitzke", email="daniel.klitzke@renumics.com"}
 ]

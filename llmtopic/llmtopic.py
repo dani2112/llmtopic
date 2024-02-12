@@ -57,6 +57,7 @@ class LLMTopic:
         max_topics: int = 3,
         custom_criteria: str = "Focus on the main topics relevant to customer satisfaction or dissatisfaction, being as specific as possible and using actual terms from the document.",
     ) -> List[Dict[int, str]]:
+        self.all_topics = [] # Reset the topics
         prompt_template1 = (
             "Please analyze the following document and determine the key topics to extract, "
             "ranging from 0 to {max_topics}. The topics should be directly derived from the document's content. "
