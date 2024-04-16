@@ -19,7 +19,8 @@ dependencies = [
   "hnne>=0.1.10",
   "tqdm>=4.66.1",
   "pyarrow>=15.0.0",
-  "pandas>=2.2.0"
+  "pandas>=2.2.0",
+  "guardrails-ai>=0.4.3"
 ]
 
 [project.urls]

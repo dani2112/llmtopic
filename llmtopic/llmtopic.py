@@ -1,10 +1,170 @@
-from typing import List, Dict
+import base64
+from typing import List, Dict, Optional
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from hnne import HNNE
 from sentence_transformers import SentenceTransformer
 from guidance import models, system, user, assistant, gen, select
+from llama_cpp import Llama
+from llama_cpp.llama_chat_format import Llava15ChatHandler
+from pydantic import BaseModel, Field
+import guardrails as gd
+from guardrails.validators import ValidChoices
+import json
+
+
+def image_to_base64_data_uri(file_path):
+    with open(file_path, "rb") as img_file:
+        base64_data = base64.b64encode(img_file.read()).decode("utf-8")
+        return f"data:image/png;base64,{base64_data}"
+
+
+class ImageCategories(BaseModel):
+    sex: str = Field(
+        description="The sex/gender of the person in the image",
+        validators=[ValidChoices(choices=["male", "female"])],
+    )
+    race: str = Field(
+        description="The race of the person in the image",
+        validators=[
+            ValidChoices(choices=["white", "black", "asian", "indian", "other"])
+        ],
+    )
+    age_group: str = Field(
+        description="The age group of the person in the image",
+        validators=[ValidChoices(choices=["child", "teen", "adult", "senior"])],
+    )
+    facial_hair: str = Field(
+        description="Describes the facial hair of the person, if any",
+        validators=[ValidChoices(choices=["none", "mustache", "beard", "goatee"])],
+    )
+    glasses: bool = Field(
+        description="Indicates if the person in the image is wearing glasses",
+    )
+    hat: bool = Field(
+        description="Indicates if the person in the image is wearing a hat",
+    )
+    makeup: bool = Field(
+        description="Indicates if the person in the image is wearing makeup",
+    )
+    eye_contact: bool = Field(
+        description="Indicates if the person in the image is making eye contact with the camera",
+    )
+    head_pose: str = Field(
+        description="The orientation of the head in the image",
+        validators=[
+            ValidChoices(choices=["forward", "tilted", "side", "upward", "downward"])
+        ],
+    )
+
+
+class LLMTopicImageSupervised:
+    def __init__(
+        self,
+        model_path: str,
+        n_gpu_layers: int = -1,
+        n_threads: int = 8,
+        n_threads_batch: int = 8,
+        n_ctx: int = 2048,
+        echo: bool = False,
+    ):
+        self._n_ctx = n_ctx
+        chat_handler = Llava15ChatHandler(
+            clip_model_path="/home/daniel/private_code/llmtopic/models/mmproj-model-f16.gguf"
+        )
+        self.llm = Llama(
+            model_path,
+            n_gpu_layers=n_gpu_layers,
+            n_threads=n_threads,
+            n_threads_batch=n_threads_batch,
+            n_ctx=n_ctx,
+            chat_handler=chat_handler,
+            logits_all=True,
+            echo=echo,
+        )
+        self.all_topics = []
+
+    def fit_transform(self, X: List[str], category_spec: BaseModel):
+
+        for image_path in X:
+            data_uri = image_to_base64_data_uri(image_path)
+
+            def llava_llm_api(
+                prompt: Optional[str] = None,
+                instruction: Optional[str] = None,
+                msg_history: Optional[list[dict]] = None,
+                **kwargs,
+            ) -> str:
+                """Custom LLM API wrapper.
+
+                At least one of prompt, instruction or msg_history should be provided.
+
+                Args:
+                    prompt (str): The prompt to be passed to the LLM API
+                    instruction (str): The instruction to be passed to the LLM API
+                    msg_history (list[dict]): The message history to be passed to the LLM API
+                    **kwargs: Any additional arguments to be passed to the LLM API
+
+                Returns:
+                    str: The output of the LLM API
+                """
+
+                schema_properties = {}
+                required_fields = []
+                for field_name, field_model in category_spec.model_fields.items():
+                    schema_properties[field_name] = {
+                        "type": "string"
+                    }  # Assuming all fields are of type string for simplicity
+                    required_fields.append(field_name)
+
+                llm_output = self.llm.create_chat_completion(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that extracts properties from an image and return them in json format.",
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": data_uri}},
+                                {
+                                    "type": "text",
+                                    "text": prompt,
+                                },
+                            ],
+                        },
+                    ],
+                    response_format={
+                        "type": "json_object",
+                        "schema": {
+                            "type": "object",
+                            "properties": schema_properties,
+                            "required": required_fields,
+                        },
+                    },
+                    temperature=0.0,
+                )
+
+                text_output = llm_output["choices"][0]["message"]["content"]
+
+                return text_output
+
+            prompt = """Generate JSON containing the properties described in the output format below:
+            
+            ${gr.complete_json_suffix_v3}
+            """
+
+            guard = gd.Guard.from_pydantic(output_class=category_spec, prompt=prompt)
+
+            res = guard(
+                llava_llm_api,
+                max_tokens=4096,
+                num_reasks=0,
+                temperature=0.0,
+            )
+            print("aaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            print(json.dumps(res.validated_output, indent=2))
 
 
 class LLMTopic:
@@ -57,7 +217,7 @@ class LLMTopic:
         max_topics: int = 3,
         custom_criteria: str = "Focus on the main topics relevant to customer satisfaction or dissatisfaction, being as specific as possible and using actual terms from the document.",
     ) -> List[Dict[int, str]]:
-        self.all_topics = [] # Reset the topics
+        self.all_topics = []  # Reset the topics
         prompt_template1 = (
             "Please analyze the following document and determine the key topics to extract, "
             "ranging from 0 to {max_topics}. The topics should be directly derived from the document's content. "
@@ -228,3 +388,18 @@ class LLMTopic:
         self._compute_topic_matrix()
 
         return self.all_topics
+
+
+if __name__ == "__main__":
+    import pandas as pd
+    import os
+
+    model = LLMTopicImageSupervised(
+        model_path="/home/daniel/private_code/llmtopic/models/llava-v1.6-mistral-7b.Q4_K_M.gguf"
+    )
+    df = pd.read_csv(
+        "/home/daniel/code/pycon24-presentation/affectnet_hq_png_with_predictions.csv"
+    )
+    prefix_path = "/home/daniel/code/pycon24-presentation"
+    df["image"] = df["image"].apply(lambda x: os.path.join(prefix_path, x))
+    model.fit_transform(df["image"].tolist(), category_spec=ImageCategories)
