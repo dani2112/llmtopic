@@ -81,90 +81,95 @@ class LLMTopicImageSupervised:
             n_ctx=n_ctx,
             chat_handler=chat_handler,
             logits_all=True,
-            echo=echo,
+            verbose=echo,
         )
         self.all_topics = []
 
     def fit_transform(self, X: List[str], category_spec: BaseModel):
+        
+        for image_path in tqdm(X):
+            try:
+                data_uri = image_to_base64_data_uri(image_path)
 
-        for image_path in X:
-            data_uri = image_to_base64_data_uri(image_path)
+                def llava_llm_api(
+                    prompt: Optional[str] = None,
+                    instruction: Optional[str] = None,
+                    msg_history: Optional[list[dict]] = None,
+                    **kwargs,
+                ) -> str:
+                    """Custom LLM API wrapper.
 
-            def llava_llm_api(
-                prompt: Optional[str] = None,
-                instruction: Optional[str] = None,
-                msg_history: Optional[list[dict]] = None,
-                **kwargs,
-            ) -> str:
-                """Custom LLM API wrapper.
+                    At least one of prompt, instruction or msg_history should be provided.
 
-                At least one of prompt, instruction or msg_history should be provided.
+                    Args:
+                        prompt (str): The prompt to be passed to the LLM API
+                        instruction (str): The instruction to be passed to the LLM API
+                        msg_history (list[dict]): The message history to be passed to the LLM API
+                        **kwargs: Any additional arguments to be passed to the LLM API
 
-                Args:
-                    prompt (str): The prompt to be passed to the LLM API
-                    instruction (str): The instruction to be passed to the LLM API
-                    msg_history (list[dict]): The message history to be passed to the LLM API
-                    **kwargs: Any additional arguments to be passed to the LLM API
+                    Returns:
+                        str: The output of the LLM API
+                    """
 
-                Returns:
-                    str: The output of the LLM API
+                    schema_properties = {}
+                    required_fields = []
+                    for field_name, _ in category_spec.model_fields.items():
+                        schema_properties[field_name] = {
+                            "type": "string"
+                        }  # Assuming all fields are of type string for simplicity
+                        required_fields.append(field_name)
+
+                    llm_output = self.llm.create_chat_completion(
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant that extracts properties from an image and return them in json format.",
+                            },
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "image_url", "image_url": {"url": data_uri}},
+                                    {
+                                        "type": "text",
+                                        "text": prompt,
+                                    },
+                                ],
+                            },
+                        ],
+                        response_format={
+                            "type": "json_object",
+                            "schema": {
+                                "type": "object",
+                                "properties": schema_properties,
+                                "required": required_fields,
+                            },
+                        },
+                        temperature=0.0,
+                    )
+
+                    text_output = llm_output["choices"][0]["message"]["content"]
+
+                    return text_output
+
+                prompt = """Generate JSON containing the properties described in the output format below:
+                
+                ${gr.complete_json_suffix_v3}
                 """
 
-                schema_properties = {}
-                required_fields = []
-                for field_name, field_model in category_spec.model_fields.items():
-                    schema_properties[field_name] = {
-                        "type": "string"
-                    }  # Assuming all fields are of type string for simplicity
-                    required_fields.append(field_name)
+                guard = gd.Guard.from_pydantic(output_class=category_spec, prompt=prompt)
 
-                llm_output = self.llm.create_chat_completion(
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant that extracts properties from an image and return them in json format.",
-                        },
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": data_uri}},
-                                {
-                                    "type": "text",
-                                    "text": prompt,
-                                },
-                            ],
-                        },
-                    ],
-                    response_format={
-                        "type": "json_object",
-                        "schema": {
-                            "type": "object",
-                            "properties": schema_properties,
-                            "required": required_fields,
-                        },
-                    },
+                res = guard(
+                    llava_llm_api,
+                    max_tokens=4096,
+                    num_reasks=0,
                     temperature=0.0,
                 )
-
-                text_output = llm_output["choices"][0]["message"]["content"]
-
-                return text_output
-
-            prompt = """Generate JSON containing the properties described in the output format below:
-            
-            ${gr.complete_json_suffix_v3}
-            """
-
-            guard = gd.Guard.from_pydantic(output_class=category_spec, prompt=prompt)
-
-            res = guard(
-                llava_llm_api,
-                max_tokens=4096,
-                num_reasks=0,
-                temperature=0.0,
-            )
-            print("aaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-            print(json.dumps(res.validated_output, indent=2))
+                self.all_topics.append(res.validated_output)
+            except KeyboardInterrupt:
+                raise
+            except:
+                print("Topic extraction failed.")
+                self.all_topics.append(None)
 
 
 class LLMTopic:
@@ -400,6 +405,11 @@ if __name__ == "__main__":
     df = pd.read_csv(
         "/home/daniel/code/pycon24-presentation/affectnet_hq_png_with_predictions.csv"
     )
+    df = df.sample(20)
     prefix_path = "/home/daniel/code/pycon24-presentation"
     df["image"] = df["image"].apply(lambda x: os.path.join(prefix_path, x))
     model.fit_transform(df["image"].tolist(), category_spec=ImageCategories)
+
+    df["attributes"] = model.all_topics
+    df.to_json("df_with_attributes.json", orient="records", indent=4)
+
